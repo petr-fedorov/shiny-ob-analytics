@@ -7,11 +7,17 @@ shinyUI(fluidPage(
   titlePanel("obAnalytics | Microstructure visualisation"),
   sidebarLayout(
     sidebarPanel(width=3,
-      dateInput("date",
-                label="",
-                value="2015-08-18",
-                min="2015-08-18",
-                max="2015-08-25"),
+      wellPanel(
+        fluidRow(column(6, uiOutput("exchanges")),column(6, uiOutput("pairs"))),
+        fluidRow(column(6, dateInput("date",
+                                     label="",
+                                     value="2019-03-22",
+                                     min="2019-03-20",
+                                     max="2019-03-22")),
+                 column(6,selectInput("tz", "", choices=OlsonNames(), selected="Europe/Moscow"))
+                 )                     
+                      
+      ),
       hr(),
       plotOutput("overview.plot",
                  height="250px"),
@@ -161,7 +167,7 @@ shinyUI(fluidPage(
                      checkboxInput("showalldepth",
                                    label="Show resting orders", value=F),
                      checkboxInput("showpercentiles",
-                                   label="Show liquidity percentiles", value=T)),
+                                   label="Show liquidity percentiles", value=F)),
               column(4, 
                      selectInput("depthbias",
                                  "Colour bias",

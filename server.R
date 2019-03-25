@@ -1,7 +1,25 @@
+
 ## Copyright (C) 2015 Phil Stubbings <phil@parasec.net>
 ## Licensed under the GPL v2 license. See LICENSE.md for full terms.
 
 library(obAnalytics)
+library(obAnalyticsDb)
+library(RPostgres)
+library(config)
+
+config <- config::get()
+Sys.chmod(config$sslkey, mode="0600")
+con <- DBI::dbConnect(RPostgres::Postgres(),
+                      user=config$user,
+                      dbname=config$dbname,
+                      host=config$host,
+                      port=config$port,
+                      sslmode="require",
+                      sslrootcert=config$sslrootcert,
+                      sslcert=config$sslcert,
+                      sslkey=config$sslkey)
+
+
 
 # display milliseconds
 options(digits.secs=3)
@@ -12,18 +30,73 @@ reverseMatrix <- function(m) m[rev(1:nrow(m)), ]
 # shiny server ep.
 shinyServer(function(input, output, session) {
 
-  # load daily data
-  data <- reactive({
-    withProgress(message="loading data...", {
-      loadData(paste0("data/", input$date, ".xz"))
-    })
+  output$exchanges <- renderUI({
+    exchanges <- RPostgres::dbGetQuery(con, "select exchange from obanalytics.exchanges")
+    selectInput("exchange","", choices=exchanges$exchange)
   })
+  
+  output$pairs <- renderUI({
+    pairs <- RPostgres::dbGetQuery(con, "select pair from obanalytics.pairs")
+    selectInput("pair","", choices=pairs$pair)
+  })
+  
+  
+  depth <- reactive( {
+    req(input$exchange, input$pair, input$date, input$tz)    
+    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
+    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    withProgress(message="loading depth ...", {
+      obAnalyticsDb::depth(con, from.time, to.time, input$exchange, input$pair)  
+      }) 
+  })
+  
+  spread <- reactive( {
+    req(input$exchange, input$pair, input$date, input$tz)    
+    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
+    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    withProgress(message="loading spread...", {
+      #      loadData(paste0("data/", input$date, ".xz"))
+      obAnalyticsDb::spread(con, from.time, to.time, input$exchange, input$pair)  
+    }) 
+  })
+  
+  trades <- reactive( {
+    req(input$exchange, input$pair, input$date, input$tz)
+    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
+    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    withProgress(message="loading trades ...", {
+      obAnalyticsDb::trades(con, from.time, to.time, input$exchange, input$pair)  
+    }) 
+  })
+  
+  
+  events <- reactive( {
+    req(input$exchange, input$pair, input$date, input$tz)
+    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
+    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    withProgress(message="loading events ...", {
+      obAnalyticsDb::events(con, from.time, to.time, input$exchange, input$pair)  
+    }) 
+  })
+
+  depth.summary <- reactive( {
+    req(input$exchange, input$pair, input$date, input$tz)
+    tp <- timePoint() 
+    from.time <- tp-zoomWidth()/2
+    to.time <- tp+zoomWidth()/2
+    withProgress(message="loading depth summary ...", {
+      obAnalyticsDb::depth_summary(con, from.time, to.time, input$exchange, input$pair)  
+    }) 
+  })
+
+  
 
   # time reference 
   timePoint <- reactive({
+    req(input$tz)
     second.of.day <- (input$time.point.h*3600) + (input$time.point.m*60) +
                       input$time.point.s + input$time.point.ms/1000
-    as.POSIXlt(input$date) + second.of.day
+    as.POSIXlt(format(input$date), tz=input$tz) + second.of.day
   })
 
   # time window
@@ -40,7 +113,7 @@ shinyServer(function(input, output, session) {
   # get order book given time point
   ob <- reactive({
     tp <- timePoint()
-    order.book.data <- orderBook(data()$events, tp, bps.range=100)
+    order.book.data <- orderBook(events(), tp, bps.range=100)
     if(!autoPvRange()) {
       bids <- order.book.data$bids 
       bids <- bids[bids$price >= priceVolumeRange()$price.from
@@ -84,7 +157,7 @@ shinyServer(function(input, output, session) {
     tp <- timePoint() 
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
-    p <- plotTrades(data()$trades)
+    p <- plotTrades(trades())
     p <- p + ggplot2::geom_vline(xintercept=as.numeric(from.time), col="blue")
     p <- p + ggplot2::geom_vline(xintercept=as.numeric(tp), col="red")
     p + ggplot2::geom_vline(xintercept=as.numeric(to.time), col="blue")
@@ -96,8 +169,8 @@ shinyServer(function(input, output, session) {
     tp <- timePoint()
     from.time <- tp-width.seconds/2
     to.time <- tp+width.seconds/2
-    events.filtered <- data()$events
-    events.filtered$volume <- events.filtered$volume*10^-8
+    events.filtered <- events()
+    #events.filtered$volume <- events.filtered$volume*10^-8
     if(!autoPvRange()) {
       events.filtered <-
           events.filtered[events.filtered$price >= priceVolumeRange()$price.from
@@ -114,8 +187,8 @@ shinyServer(function(input, output, session) {
     tp <- timePoint()
     from.time <- tp-width.seconds/2
     to.time <- tp+width.seconds/2
-    events.filtered <- data()$events  
-    events.filtered$volume <- events.filtered$volume*10^-8
+    events.filtered <- events()  
+    #events.filtered$volume <- events.filtered$volume*10^-8
     if(!autoPvRange()) {
       events.filtered <-
           events.filtered[events.filtered$price >= priceVolumeRange()$price.from
@@ -149,7 +222,7 @@ shinyServer(function(input, output, session) {
       bids$timestamp <- format(bids$timestamp, "%H:%M:%OS")
       bids
     }
-  }, include.rownames=F, include.colnames=T, align=rep("r", 7))
+  }, include.rownames=F, include.colnames=T, align=paste0(rep("l", 6), collapse=""))
 
   # order book asks
   output$ob.asks.out <- renderTable({
@@ -162,7 +235,7 @@ shinyServer(function(input, output, session) {
       asks$timestamp <- format(asks$timestamp, "%H:%M:%OS")
       asks
     }
-  }, include.rownames=F, include.colnames=T, align=rep("l", 7))
+  }, include.rownames=F, include.colnames=T, align=paste0(rep("l", 6), collapse=""))
 
   # liquidity/depth map plot
   output$depth.map.plot <- renderPlot({
@@ -171,14 +244,14 @@ shinyServer(function(input, output, session) {
       tp <- timePoint()
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
+      depth <- depth()
       show.mp <- input$showmidprice
-      trades <- if(input$showtrades) data()$trades else NULL
-      spread <- if(input$showspread || show.mp) getSpread(data()$depth.summary)
-                else NULL
+      trades <- if(input$showtrades) trades() else NULL
+      spread <- if(input$showspread || show.mp) spread() else NULL
       show.all.depth <- input$showalldepth
       col.bias <- if(input$depthbias == 0) input$depthbias.value else 0
       p <- if(!autoPvRange())
-        plotPriceLevels(data()$depth, spread, trades,
+        plotPriceLevels(depth, spread, trades,
                         show.mp=input$showmidprice,
                         show.all.depth=show.all.depth,
                         col.bias=col.bias,
@@ -187,16 +260,16 @@ shinyServer(function(input, output, session) {
                         price.from=priceVolumeRange()$price.from,
                         price.to=priceVolumeRange()$price.to,
                         volume.from=priceVolumeRange()$volume.from,
-                        volume.to=priceVolumeRange()$volume.to,
-                        volume.scale=10^-8)
+                        volume.to=priceVolumeRange()$volume.to
+                        )
       else 
-        plotPriceLevels(data()$depth, spread, trades,
+        plotPriceLevels(depth, spread, trades,
                         show.mp=input$showmidprice,
                         show.all.depth=show.all.depth,
                         col.bias=col.bias,
-                        volume.scale=10^-8,
                         start.time=from.time,
-                        end.time=to.time)
+                        end.time=to.time
+                        )
         #p + ggplot2::geom_vline(xintercept=as.numeric(tp), col="red")
         p
     })
@@ -209,8 +282,8 @@ shinyServer(function(input, output, session) {
       tp <- timePoint()
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
-      plotVolumePercentiles(data()$depth.summary, start.time=from.time,
-                            end.time=to.time, volume.scale=10^-8, perc.line=F)
+      plotVolumePercentiles(depth.summary(), start.time=from.time,
+                            end.time=to.time, perc.line=F)
     })
   })
 
@@ -224,19 +297,17 @@ shinyServer(function(input, output, session) {
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
       p <- if(!autoPvRange())
-        plotEventMap(data()$events,
+        plotEventMap(events(),
                      start.time=from.time,
                      end.time=to.time,
-                     volume.scale=10^-8,
                      price.from=priceVolumeRange()$price.from,
                      price.to=priceVolumeRange()$price.to,
                      volume.from=priceVolumeRange()$volume.from,
                      volume.to=priceVolumeRange()$volume.to)
       else
-        plotEventMap(data()$events,
+        plotEventMap(events(),
                      start.time=from.time,
-                     end.time=to.time,
-                     volume.scale=10^-8)
+                     end.time=to.time)
       p
     })  
   })
@@ -249,30 +320,28 @@ shinyServer(function(input, output, session) {
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
       p <- if(!autoPvRange())
-        plotVolumeMap(data()$events,
+        plotVolumeMap(events(),
                       action="deleted",
                       start.time=from.time,
                       end.time=to.time,
                       log.scale=input$logvol,
-                      volume.scale=10^-8,
                       price.from=priceVolumeRange()$price.from,
                       price.to=priceVolumeRange()$price.to,
                       volume.from=priceVolumeRange()$volume.from,
                       volume.to=priceVolumeRange()$volume.to)            
       else
-        plotVolumeMap(data()$events,
+        plotVolumeMap(events(),
                       action="deleted",
                       start.time=from.time,
                       end.time=to.time,
-                      log.scale=input$logvol,
-                      volume.scale=10^-8)
+                      log.scale=input$logvol)
       p
     })
   })
 
   # trades tab
   output$trades.out <- renderDataTable({
-    trades <- data()$trades
+    trades <- trades()
     tp <- timePoint()
     width.seconds <- zoomWidth()
     from.time <- tp-width.seconds/2
@@ -290,7 +359,7 @@ shinyServer(function(input, output, session) {
 
   # events tab
   output$events.out <- renderDataTable({
-    events <- data()$events
+    events <- events()
     tp <- timePoint()
     width.seconds <- zoomWidth()
     from.time <- tp-width.seconds/2
