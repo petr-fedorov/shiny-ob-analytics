@@ -1,6 +1,8 @@
 ## Copyright (C) 2015 Phil Stubbings <phil@parasec.net>
 ## Licensed under the GPL v2 license. See LICENSE.md for full terms.
 
+zoneinfo <- OlsonNames()
+
 shinyUI(fluidPage(
   includeCSS("www/bootstrap-slate.css"),
   includeCSS("www/my.css"),
@@ -11,10 +13,10 @@ shinyUI(fluidPage(
         fluidRow(column(6, uiOutput("exchanges")),column(6, uiOutput("pairs"))),
         fluidRow(column(6, dateInput("date",
                                      label="",
-                                     value="2019-03-22",
+                                     value="2019-03-28",
                                      min="2019-03-20",
-                                     max="2019-03-22")),
-                 column(6,selectInput("tz", "", choices=OlsonNames(), selected="Europe/Moscow"))
+                                     max="2019-03-28")),
+                 column(6,selectInput("tz", "", choices=zoneinfo, selected="Europe/Moscow"))
                  )                     
                       
       ),
@@ -28,7 +30,7 @@ shinyUI(fluidPage(
                     "Hour",
                     min=0,
                     max=23,
-                    value=23,
+                    value=13,
                     step=1,
                     width="100%",
                     animate=animationOptions(interval=3000, loop=F)),
