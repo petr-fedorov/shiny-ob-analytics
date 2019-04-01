@@ -13,9 +13,9 @@ shinyUI(fluidPage(
         fluidRow(column(6, uiOutput("exchanges")),column(6, uiOutput("pairs"))),
         fluidRow(column(6, dateInput("date",
                                      label="",
-                                     value="2019-03-28",
+                                     value="2019-03-29",
                                      min="2019-03-20",
-                                     max="2019-03-28")),
+                                     max="2019-03-31")),
                  column(6,selectInput("tz", "", choices=zoneinfo, selected="Europe/Moscow"))
                  )                     
                       
@@ -30,7 +30,7 @@ shinyUI(fluidPage(
                     "Hour",
                     min=0,
                     max=23,
-                    value=13,
+                    value=12,
                     step=1,
                     width="100%",
                     animate=animationOptions(interval=3000, loop=F)),
@@ -38,7 +38,7 @@ shinyUI(fluidPage(
                     "Minute",
                     min=0,
                     max=59,
-                    value=30,
+                    value=0,
                     step=1,
                     width="100%",
                     animate=animationOptions(interval=3000, loop=F)),

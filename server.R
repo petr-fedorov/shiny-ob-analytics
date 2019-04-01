@@ -49,7 +49,7 @@ shinyServer(function(input, output, session) {
 
   output$exchanges <- renderUI({
     exchanges <- RPostgres::dbGetQuery(con, "select exchange from obanalytics.exchanges")
-    selectInput("exchange","", choices=exchanges$exchange, selected="bitstamp")
+    selectInput("exchange","", choices=exchanges$exchange, selected="bitfinex")
   })
   
   output$pairs <- renderUI({
@@ -269,7 +269,7 @@ shinyServer(function(input, output, session) {
 
   # liquidity/depth map plot
   output$depth.map.plot <- renderPlot({
-    withProgress(message="generating depth map...", {  
+    withProgress(message="generating Price level volume ...", {  
       width.seconds <- zoomWidth()
       tp <- timePoint()
       from.time <- tp-width.seconds/2
@@ -326,7 +326,7 @@ shinyServer(function(input, output, session) {
 
   # order events plot
   output$quote.map.plot <- renderPlot({
-    withProgress(message="generating event map...", {
+    withProgress(message="generating Order events ...", {
       width.seconds <- zoomWidth()
       tp <- timePoint()
       from.time <- tp-width.seconds/2
@@ -351,7 +351,7 @@ shinyServer(function(input, output, session) {
 
   # cancellation map
   output$cancellation.volume.map.plot <- renderPlot({
-    withProgress(message="generating cancellation map...", {     
+    withProgress(message="generating Cancellation ...", {     
       width.seconds <- zoomWidth()
       tp <- timePoint()
       from.time <- tp-width.seconds/2
