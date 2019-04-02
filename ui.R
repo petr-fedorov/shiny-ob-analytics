@@ -1,7 +1,7 @@
 ## Copyright (C) 2015 Phil Stubbings <phil@parasec.net>
 ## Licensed under the GPL v2 license. See LICENSE.md for full terms.
 
-zoneinfo <- OlsonNames()
+zoneinfo <- c("Europe/Moscow") # OlsonNames()
 
 shinyUI(fluidPage(
   includeCSS("www/bootstrap-slate.css"),
@@ -152,33 +152,24 @@ shinyUI(fluidPage(
                             tableOutput("ob.asks.out"))))),
         tabPanel("Price level volume", 
                  wellPanel(
-                   plotOutput("depth.map.plot", height="800px")),
-          conditionalPanel(
-            condition="input.showpercentiles == true",
-            wellPanel(
-              plotOutput("depth.percentile.plot", height="400px"))),
-          wellPanel(
-            fluidRow(
-              column(6,
-                     checkboxInput("showtrades",
-                                   label="Show trades", value=F),
-                     checkboxInput("showspread",
-                                   label="Show spread", value=F),
-	             checkboxInput("showmidprice",
-                                   label="Show midprice", value=T),
-                     checkboxInput("showalldepth",
-                                   label="Show resting orders", value=F),
-                     checkboxInput("showpercentiles",
-                                   label="Show liquidity percentiles", value=F)),
-              column(4, 
-                     selectInput("depthbias",
-                                 "Colour bias",
-                                 list("Log10"=2,
-                                      "Custom"=0),
-                                 selected=0),
-                conditionalPanel(
-                  condition="input.depthbias == 0",
-                  numericInput("depthbias.value", label="bias", value=0.1)))))),
+                   fluidRow( column(2, checkboxInput("showtrades",label="Show trades", value=F)),
+                             column(2, checkboxInput("showspread",label="Show spread", value=F)),
+                             column(2, checkboxInput("showmidprice", label="Show midprice", value=T)),
+                             column(2, checkboxInput("showalldepth",label="Show resting orders", value=F)),
+                             column(2, selectInput("depthbias","Colour bias",list("Log10"=2,"Custom"=0), selected=0)),
+                             column(2, conditionalPanel(condition="input.depthbias == 0",numericInput("depthbias.value", label="bias", value=0.1)))
+                            )
+                   ,
+                   plotOutput("depth.map.plot", height="800px"))
+#                 ,
+#                conditionalPanel(
+#                  condition="input.showpercentiles == true",
+#                  wellPanel(
+#                    plotOutput("depth.percentile.plot", height="400px"))),
+#          wellPanel(
+#            fluidRow(column(4,  checkboxInput("showpercentiles",label="Show liquidity percentiles", value=F))
+#              ))
+        ),
         tabPanel("Order events",
                  wellPanel(
                    plotOutput("quote.map.plot", height="800px"))

@@ -9,16 +9,6 @@ library(config)
 
 config <- config::get()
 Sys.chmod(config$sslkey, mode="0600")
-con <- DBI::dbConnect(RPostgres::Postgres(),
-                      user=config$user,
-                      dbname=config$dbname,
-                      host=config$host,
-                      port=config$port,
-                      sslmode="require",
-                      sslrootcert=config$sslrootcert,
-                      sslcert=config$sslcert,
-                      sslkey=config$sslkey,
-                      bigint="numeric")
 
 
 
@@ -45,8 +35,24 @@ get_time_format <- function(from.time, to.time ) {
 }
 
 # shiny server ep.
-shinyServer(function(input, output, session) {
-
+server <- function(input, output, session) {
+  
+  con <- DBI::dbConnect(RPostgres::Postgres(),
+                        user=config$user,
+                        dbname=config$dbname,
+                        host=config$host,
+                        port=config$port,
+                        sslmode="require",
+                        sslrootcert=config$sslrootcert,
+                        sslcert=config$sslcert,
+                        sslkey=config$sslkey,
+                        bigint="numeric")
+  
+  
+  onSessionEnded(function() { DBI::dbDisconnect()})
+  
+  database.cache <- new.env(parent = emptyenv())
+  
   output$exchanges <- renderUI({
     exchanges <- RPostgres::dbGetQuery(con, "select exchange from obanalytics.exchanges")
     selectInput("exchange","", choices=exchanges$exchange, selected="bitfinex")
@@ -57,24 +63,43 @@ shinyServer(function(input, output, session) {
     selectInput("pair","", choices=pairs$pair, selected="BTCUSD")
   })
   
-  
+
   depth <- reactive( {
     req(input$exchange, input$pair, input$date, input$tz)    
     from.time <- paste0(input$date, " 00:00:00 ", input$tz)
     to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
-    depth <- withProgress(message="loading depth ...", {
-      obAnalyticsDb::depth(con, from.time, to.time, input$exchange, input$pair)  
-      }) 
+    
+    cache.key <- paste0("depth", input$exchange, input$pair, collapse="")
+    
+    if(!exists(cache.key, envir=database.cache)) {
+      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
+    }
+    
+    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
+      withProgress(message="loading depth ...", {
+        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::depth(con, from.time, to.time, input$exchange, input$pair)  
+        }) 
+    }
+    database.cache[[cache.key]][[as.character(input$date)]]
   })
   
   spread <- reactive( {
     req(input$exchange, input$pair, input$date, input$tz)    
     from.time <- paste0(input$date, " 00:00:00 ", input$tz)
     to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
-    spread <- withProgress(message="loading spread...", {
-      obAnalyticsDb::spread(con, from.time, to.time, input$exchange, input$pair)  
-    }) 
     
+    cache.key <- paste0("spread", input$exchange, input$pair, collapse="")
+
+    if(!exists(cache.key, envir=database.cache)) {
+      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
+    }
+    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
+        
+      spread <- withProgress(message="loading spread...", {
+        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::spread(con, from.time, to.time, input$exchange, input$pair)  
+      }) 
+    }
+    database.cache[[cache.key]][[as.character(input$date)]]
   })
   
   trades <- reactive( {
@@ -91,19 +116,39 @@ shinyServer(function(input, output, session) {
     req(input$exchange, input$pair, input$date, input$tz)
     from.time <- paste0(input$date, " 00:00:00 ", input$tz)
     to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
-    withProgress(message="loading events ...", {
-      obAnalyticsDb::events(con, from.time, to.time, input$exchange, input$pair)  
-    }) 
+    
+    cache.key <- paste0("events", input$exchange, input$pair, collapse="")
+    
+    if(!exists(cache.key, envir=database.cache)) {
+      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
+    }
+    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
+        
+      withProgress(message="loading events ...", {
+        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::events(con, from.time, to.time, input$exchange, input$pair)  
+      }) 
+    }
+    database.cache[[cache.key]][[as.character(input$date)]]
+    
   })
 
   depth.summary <- reactive( {
     req(input$exchange, input$pair, input$date, input$tz)
-    tp <- timePoint() 
-    from.time <- tp-zoomWidth()/2
-    to.time <- tp+zoomWidth()/2
-    withProgress(message="loading depth summary ...", {
-      obAnalyticsDb::depth_summary(con, from.time, to.time, input$exchange, input$pair)  
-    }) 
+    
+    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
+    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    
+    cache.key <- paste0("depthsummary", input$exchange, input$pair, collapse="")
+    
+    if(!exists(cache.key, envir=database.cache)) {
+      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
+    }
+    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
+      withProgress(message="loading depth summary ...", {
+        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::depth_summary(con, from.time, to.time, input$exchange, input$pair)  
+      }) 
+    }
+    database.cache[[cache.key]][[as.character(input$date)]]
   })
 
   
@@ -419,4 +464,4 @@ shinyServer(function(input, output, session) {
                                      $("td", row).css("background",
                                          data[7]=="ask"?"#7C0A02":"#191970");
                                    }')))
-})
+}
