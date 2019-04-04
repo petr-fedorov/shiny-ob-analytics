@@ -10,15 +10,16 @@ shinyUI(fluidPage(
   sidebarLayout(
     sidebarPanel(width=3,
       wellPanel(
-        fluidRow(column(6, uiOutput("exchanges")),column(6, uiOutput("pairs"))),
-        fluidRow(column(6, dateInput("date",
+        fluidRow(column(6,selectInput("tz", "", choices=zoneinfo, selected="Europe/Moscow")), 
+                 column(6, dateInput("date",
                                      label="",
-                                     value="2019-03-29",
-                                     min="2019-03-20",
-                                     max="2019-03-31")),
-                 column(6,selectInput("tz", "", choices=zoneinfo, selected="Europe/Moscow"))
-                 )                     
-                      
+                                     value="2019-04-03",
+                                     min="2019-04-03",
+                                     max="2019-04-03"))),
+        fluidRow(
+                 column(6, uiOutput("exchanges")),
+                 column(6, uiOutput("pairs")) 
+                 )
       ),
       hr(),
       plotOutput("overview.plot",

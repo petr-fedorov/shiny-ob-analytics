@@ -49,18 +49,30 @@ server <- function(input, output, session) {
                         bigint="numeric")
   
   
-  onSessionEnded(function() { DBI::dbDisconnect()})
+  onSessionEnded(function() { DBI::dbDisconnect(con)})
   
   database.cache <- new.env(parent = emptyenv())
   
   output$exchanges <- renderUI({
-    exchanges <- RPostgres::dbGetQuery(con, "select exchange from obanalytics.exchanges")
-    selectInput("exchange","", choices=exchanges$exchange, selected="bitfinex")
+    req(input$date, input$tz)
+    
+    tp <- as.POSIXct(input$date, tz=input$tz)
+    
+    query <- paste0("select oba_available_exchanges as exchange from obanalytics.oba_available_exchanges(", 
+                    shQuote(format(tp, usetz=T)), ") order by 1" )
+    exchanges <- RPostgres::dbGetQuery(con, query)
+    selectInput("exchange","", choices=exchanges$exchange)
   })
   
   output$pairs <- renderUI({
-    pairs <- RPostgres::dbGetQuery(con, "select pair from obanalytics.pairs")
-    selectInput("pair","", choices=pairs$pair, selected="BTCUSD")
+    req(input$date, input$exchange, input$tz)
+
+    tp <- as.POSIXct(input$date, tz=input$tz)
+    
+    query <- paste0("select oba_available_pairs as pair from obanalytics.oba_available_pairs(", 
+                    shQuote(format(tp, usetz=T))," , ", "obanalytics.oba_exchange_id(", shQuote(input$exchange), ")", ") order by 1" )
+    pairs <- RPostgres::dbGetQuery(con, query)
+    selectInput("pair","", choices=pairs$pair)
   })
   
 
@@ -95,7 +107,7 @@ server <- function(input, output, session) {
     }
     if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
         
-      spread <- withProgress(message="loading spread...", {
+      withProgress(message="loading spread...", {
         database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::spread(con, from.time, to.time, input$exchange, input$pair)  
       }) 
     }
@@ -106,9 +118,19 @@ server <- function(input, output, session) {
     req(input$exchange, input$pair, input$date, input$tz)
     from.time <- paste0(input$date, " 00:00:00 ", input$tz)
     to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
-    withProgress(message="loading trades ...", {
-      obAnalyticsDb::trades(con, from.time, to.time, input$exchange, input$pair)  
-    }) 
+    
+    cache.key <- paste0("trades", input$exchange, input$pair, collapse="")
+    
+    if(!exists(cache.key, envir=database.cache)) {
+      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
+    }
+    
+    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
+      withProgress(message="loading trades ...", {
+        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::trades(con, from.time, to.time, input$exchange, input$pair)  
+      }) 
+    }
+    database.cache[[cache.key]][[as.character(input$date)]]
   })
   
   
