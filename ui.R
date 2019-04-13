@@ -13,12 +13,12 @@ shinyUI(fluidPage(
         fluidRow(column(6,selectInput("tz", "", choices=zoneinfo, selected="Europe/Moscow")), 
                  column(6, dateInput("date",
                                      label="",
-                                     value="2019-04-03",
-                                     min="2019-04-03",
-                                     max="2019-04-03"))),
+                                     value=Sys.Date(),
+                                     min="2019-04-01",
+                                     max=Sys.Date()))),
         fluidRow(
-                 column(6, uiOutput("exchanges")),
-                 column(6, uiOutput("pairs")) 
+                column(6, selectInput("exchange", "", choices="")),
+                column(6, selectInput("pair", "", choices=""))
                  )
       ),
       hr(),
@@ -31,7 +31,7 @@ shinyUI(fluidPage(
                     "Hour",
                     min=0,
                     max=23,
-                    value=12,
+                    value=as.POSIXlt(Sys.time() - 3600)$hour,
                     step=1,
                     width="100%",
                     animate=animationOptions(interval=3000, loop=F)),
@@ -39,7 +39,7 @@ shinyUI(fluidPage(
                     "Minute",
                     min=0,
                     max=59,
-                    value=0,
+                    value=as.POSIXlt(Sys.time() - 3600)$min,
                     step=1,
                     width="100%",
                     animate=animationOptions(interval=3000, loop=F)),
@@ -156,7 +156,7 @@ shinyUI(fluidPage(
                    fluidRow( column(2, checkboxInput("showtrades",label="Show trades", value=F)),
                              column(2, checkboxInput("showspread",label="Show spread", value=F)),
                              column(2, checkboxInput("showmidprice", label="Show midprice", value=T)),
-                             column(2, checkboxInput("showalldepth",label="Show resting orders", value=F)),
+                             column(2, checkboxInput("showalldepth",label="Show resting orders", value=T)),
                              column(2, selectInput("depthbias","Colour bias",list("Log10"=2,"Custom"=0), selected=0)),
                              column(2, conditionalPanel(condition="input.depthbias == 0",numericInput("depthbias.value", label="bias", value=0.1)))
                             )

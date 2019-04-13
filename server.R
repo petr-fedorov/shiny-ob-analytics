@@ -51,137 +51,156 @@ server <- function(input, output, session) {
   
   onSessionEnded(function() { DBI::dbDisconnect(con)})
   
-  database.cache <- new.env(parent = emptyenv())
-  
-  output$exchanges <- renderUI({
-    req(input$date, input$tz)
+
+  exchanges <- reactive({
+    req(input$date, input$tz)    
     
-    tp <- as.POSIXct(input$date, tz=input$tz)
+    tp_start <- as.POSIXct(paste0(input$date, " 00:00:00 "), tz=input$tz)
+    tp_end <- as.POSIXct(paste0(input$date, " 23:59:59"), tz=input$tz)
     
     query <- paste0("select oba_available_exchanges as exchange from obanalytics.oba_available_exchanges(", 
-                    shQuote(format(tp, usetz=T)), ") order by 1" )
-    exchanges <- RPostgres::dbGetQuery(con, query)
-    selectInput("exchange","", choices=exchanges$exchange)
+                    shQuote(format(tp_start, usetz=T))," , ", shQuote(format(tp_end, usetz=T)), ") order by 1" )
+    exchanges <- RPostgres::dbGetQuery(con, query)$exchange
+    exchange <- isolate(input$exchange)
+    
+    if(!exchange %in% exchanges) {
+      updateSelectInput(session, "exchange",choices=exchanges)
+    }
+    else {
+      updateSelectInput(session, "exchange",choices=exchanges, selected=exchange)
+    }
+    exchanges
   })
   
-  output$pairs <- renderUI({
-    req(input$date, input$exchange, input$tz)
+  exchange <- reactive({
+    exchanges <- exchanges()
+    exchange <- input$exchange
+    if(!exchange %in% exchanges ) {
+      req(FALSE)
+    }
+    exchange
+  })
+  
+  
+  pairs <- reactive({
+    
+    exchange <- exchange()
 
-    tp <- as.POSIXct(input$date, tz=input$tz)
+    tp_start <- as.POSIXct(paste0(input$date, " 00:00:00 "), tz=input$tz)
+    tp_end <- as.POSIXct(paste0(input$date, " 23:59:59"), tz=input$tz)
     
     query <- paste0("select oba_available_pairs as pair from obanalytics.oba_available_pairs(", 
-                    shQuote(format(tp, usetz=T))," , ", "obanalytics.oba_exchange_id(", shQuote(input$exchange), ")", ") order by 1" )
-    pairs <- RPostgres::dbGetQuery(con, query)
-    selectInput("pair","", choices=pairs$pair)
+                    shQuote(format(tp_start, usetz=T))," , ", shQuote(format(tp_end, usetz=T)), " , ",
+                    "obanalytics.oba_exchange_id(", shQuote(exchange), ")", ") order by 1" )
+    
+    pairs <- RPostgres::dbGetQuery(con, query)$pair
+    pair <- isolate(input$pair)
+    
+    if(!pair %in% pairs ) {
+      updateSelectInput(session, "pair",choices=pairs)
+    }
+    else {
+      updateSelectInput(session, "pair",choices=pairs, selected=pair)
+    }
+    
+    pairs
+
+  })
+
+  pair <- reactive({
+    pairs <- pairs()
+    pair <- input$pair
+    if(!pair %in% pairs ) {
+      req(FALSE)
+    }
+    pair  
   })
   
+  
+  
+  # time reference 
+  timePoint <- reactive({
+    req(input$date, input$tz)
+    second.of.day <- (input$time.point.h*3600) + (input$time.point.m*60) +
+      input$time.point.s + input$time.point.ms/1000
+    as.POSIXlt(format(input$date), tz=input$tz) + second.of.day
+  })
+  
+  
+
 
   depth <- reactive( {
-    req(input$exchange, input$pair, input$date, input$tz)    
-    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
-    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    tp <- timePoint() 
+    from.time <- tp-zoomWidth()/2
+    to.time <- tp+zoomWidth()/2
+
+    exchange <- exchange()
+    pair <- pair()
     
-    cache.key <- paste0("depth", input$exchange, input$pair, collapse="")
-    
-    if(!exists(cache.key, envir=database.cache)) {
-      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
-    }
-    
-    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
-      withProgress(message="loading depth ...", {
-        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::depth(con, from.time, to.time, input$exchange, input$pair)  
+    withProgress(message="loading depth ...", {
+        obAnalyticsDb::depth(con, from.time, to.time, exchange, pair)  
         }) 
-    }
-    database.cache[[cache.key]][[as.character(input$date)]]
   })
   
   spread <- reactive( {
-    req(input$exchange, input$pair, input$date, input$tz)    
-    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
-    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    tp <- timePoint() 
+    from.time <- tp-zoomWidth()/2
+    to.time <- tp+zoomWidth()/2
+    exchange <- exchange()
+    pair <- pair()
     
-    cache.key <- paste0("spread", input$exchange, input$pair, collapse="")
 
-    if(!exists(cache.key, envir=database.cache)) {
-      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
-    }
-    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
-        
-      withProgress(message="loading spread...", {
-        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::spread(con, from.time, to.time, input$exchange, input$pair)  
+    withProgress(message="loading spread...", {
+        obAnalyticsDb::spread(con, from.time, to.time, exchange, pair)  
       }) 
-    }
-    database.cache[[cache.key]][[as.character(input$date)]]
   })
   
   trades <- reactive( {
-    req(input$exchange, input$pair, input$date, input$tz)
+    req(input$date, input$tz)
+    
     from.time <- paste0(input$date, " 00:00:00 ", input$tz)
     to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+
+    exchange <- exchange()
+    pair <- pair()
     
-    cache.key <- paste0("trades", input$exchange, input$pair, collapse="")
-    
-    if(!exists(cache.key, envir=database.cache)) {
-      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
-    }
-    
-    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
-      withProgress(message="loading trades ...", {
-        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::trades(con, from.time, to.time, input$exchange, input$pair)  
-      }) 
-    }
-    database.cache[[cache.key]][[as.character(input$date)]]
+    withProgress(message="loading trades ...", {
+      obAnalyticsDb::trades(con, from.time, to.time, exchange, pair)  
+    }) 
   })
   
   
   events <- reactive( {
-    req(input$exchange, input$pair, input$date, input$tz)
-    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
-    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
     
-    cache.key <- paste0("events", input$exchange, input$pair, collapse="")
+    tp <- timePoint() 
+    from.time <- tp-zoomWidth()/2
+    to.time <- tp+zoomWidth()/2
     
-    if(!exists(cache.key, envir=database.cache)) {
-      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
-    }
-    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
-        
-      withProgress(message="loading events ...", {
-        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::events(con, from.time, to.time, input$exchange, input$pair)  
-      }) 
-    }
-    database.cache[[cache.key]][[as.character(input$date)]]
+    exchange <- exchange()
+    pair <- pair()
     
+    withProgress(message="loading events ...", {
+      obAnalyticsDb::events(con, from.time, to.time, exchange, pair)  
+    }) 
+
   })
 
   depth.summary <- reactive( {
-    req(input$exchange, input$pair, input$date, input$tz)
     
-    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
-    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
+    tp <- timePoint() 
+    from.time <- tp-zoomWidth()/2
+    to.time <- tp+zoomWidth()/2
     
-    cache.key <- paste0("depthsummary", input$exchange, input$pair, collapse="")
+    exchange <- exchange()
+    pair <- pair()
     
-    if(!exists(cache.key, envir=database.cache)) {
-      database.cache[[cache.key]] <<- new.env(parent = emptyenv())
-    }
-    if(!exists(as.character(input$date), envir=database.cache[[cache.key]])) {
-      withProgress(message="loading depth summary ...", {
-        database.cache[[cache.key]][[as.character(input$date)]] <- obAnalyticsDb::depth_summary(con, from.time, to.time, input$exchange, input$pair)  
-      }) 
-    }
-    database.cache[[cache.key]][[as.character(input$date)]]
+    withProgress(message="loading depth summary ...", {
+      obAnalyticsDb::depth_summary(con, from.time, to.time, exchange, pair)  
+    }) 
   })
 
   
 
-  # time reference 
-  timePoint <- reactive({
-    req(input$tz)
-    second.of.day <- (input$time.point.h*3600) + (input$time.point.m*60) +
-                      input$time.point.s + input$time.point.ms/1000
-    as.POSIXlt(format(input$date), tz=input$tz) + second.of.day
-  })
 
   # time window
   zoomWidth <- reactive({
@@ -196,12 +215,17 @@ server <- function(input, output, session) {
 
   # get order book given time point
   ob <- reactive({
-    req(input$exchange, input$pair, input$date, input$tz)
+    
     tp <- timePoint() 
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
+    
+    exchange <- exchange()
+    pair <- pair()
+    
+    
     order.book.data <- withProgress(message="loading order book ...", {
-      obAnalyticsDb::order_book(con, tp, input$exchange, input$pair, bps.range=100 )  
+      obAnalyticsDb::order_book(con, tp, exchange, pair, bps.range=100 )  
     }) 
     if(!autoPvRange()) {
       bids <- order.book.data$bids 
@@ -260,7 +284,7 @@ server <- function(input, output, session) {
     tp <- timePoint()
     from.time <- tp-width.seconds/2
     to.time <- tp+width.seconds/2
-    fmt <- get_time_format(from.time, to.time)  
+    fmt <- get_time_format(from.time, to.time) 
     
     events.filtered <- events()
     #events.filtered$volume <- events.filtered$volume*10^-8
