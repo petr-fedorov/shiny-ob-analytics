@@ -3,9 +3,18 @@
 
 zoneinfo <- c("Europe/Moscow") # OlsonNames()
 
-shinyUI(fluidPage(
+ui <- function(req) {
+fluidPage(
   includeCSS("www/bootstrap-slate.css"),
   includeCSS("www/my.css"),
+  div(style = "display: none;",
+      textInput("remote_addr", "remote_addr",
+                if (!is.null(req[["HTTP_X_FORWARDED_FOR"]]))
+                  req[["HTTP_X_FORWARDED_FOR"]]
+                else
+                  req[["REMOTE_ADDR"]]
+      )
+  ),
   titlePanel("obAnalytics | Microstructure visualisation"),
   sidebarLayout(
     sidebarPanel(width=3,
@@ -201,4 +210,6 @@ shinyUI(fluidPage(
                    br(),
                    p("Copyright", HTML("&copy;"), "2015, Phil Stubbings."),
                    p(a("phil@parasec.net", href="mailto:phil@parasec.net")),
-                   p(a("http://parasec.net", href="http://parasec.net")))))))))
+                   p(a("http://parasec.net", href="http://parasec.net"))))))))
+}
+

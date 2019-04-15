@@ -51,6 +51,10 @@ server <- function(input, output, session) {
   
   onSessionEnded(function() { DBI::dbDisconnect(con)})
   
+  DBI::dbExecute(con, paste0("set application_name to ",shQuote(isolate(input$remote_addr)) ))
+  
+  cache <- new.env(parent=emptyenv())
+  
 
   exchanges <- reactive({
     req(input$date, input$tz)    
@@ -138,7 +142,7 @@ server <- function(input, output, session) {
     pair <- pair()
     
     withProgress(message="loading depth ...", {
-        obAnalyticsDb::depth(con, from.time, to.time, exchange, pair)  
+        obAnalyticsDb::depth(con, from.time, to.time, exchange, pair, cache=cache)  
         }) 
   })
   
