@@ -1,14 +1,15 @@
 
+
 ## Copyright (C) 2015 Phil Stubbings <phil@parasec.net>
 ## Licensed under the GPL v2 license. See LICENSE.md for full terms.
 
 library(obAnalytics)
-library(obAnalyticsDb)
+library(obadiah)
 library(RPostgres)
 library(config)
+library(dplyr)
+library(lubridate)
 
-config <- config::get()
-Sys.chmod(config$sslkey, mode="0600")
 
 
 
@@ -37,67 +38,75 @@ get_time_format <- function(from.time, to.time ) {
 # shiny server ep.
 server <- function(input, output, session) {
   
-  con <- DBI::dbConnect(RPostgres::Postgres(),
-                        user=config$user,
-                        dbname=config$dbname,
-                        host=config$host,
-                        port=config$port,
-                        sslmode="require",
-                        sslrootcert=config$sslrootcert,
-                        sslcert=config$sslcert,
-                        sslkey=config$sslkey,
-                        bigint="numeric")
   
+  con <- (function() {
+    dbObj <- NULL
+    function() {
+      if(is.null(dbObj) || tryCatch(DBI::dbGetQuery(dbObj, "select false as result")$result, error = function(e) TRUE )) {
+        dbObj <<- DBI::dbConnect(RPostgres::Postgres(),
+                                 user=config$user,
+                                 dbname=config$dbname,
+                                 host=config$host,
+                                 port=config$port,
+                                 sslmode="require",
+                                 sslrootcert=config$sslrootcert,
+                                 sslcert=config$sslcert,
+                                 sslkey=config$sslkey,
+                                 bigint="numeric")
+      }
+      dbObj
+    }
+  })()
+
+
+  onSessionEnded(function() { DBI::dbDisconnect(con())})
   
-  onSessionEnded(function() { DBI::dbDisconnect(con)})
-  
-  DBI::dbExecute(con, paste0("set application_name to ",shQuote(isolate(input$remote_addr)) ))
+  DBI::dbExecute(con(), paste0("set application_name to ",shQuote(isolate(input$remote_addr)) ))
   
   cache <- new.env(parent=emptyenv())
   
-
-  exchanges <- reactive({
-    req(input$date, input$tz)    
+  query <- paste0("select oba_available_exchanges as exchange from obanalytics.oba_available_exchanges() order by 1" )
+  exchanges <- RPostgres::dbGetQuery(con(), query)$exchange
+  updateSelectInput(session, "exchange",choices=exchanges)
+  
+  process_dblclick <- function(raw_input) {
+    tp <- as.POSIXct(raw_input$x, origin='1970-01-01 00:00.00 UTC')
+    tp <- with_tz(tp, tz=values$tz)
+    updateDateInput(session, "date", value=date(tp))
+    updateSliderInput(session, "time.point.h", value=hour(tp))
+    updateSliderInput(session, "time.point.m", value=minute(tp))
+    updateSliderInput(session, "time.point.s", value=second(tp))
     
-    tp_start <- as.POSIXct(paste0(input$date, " 00:00:00 "), tz=input$tz)
-    tp_end <- as.POSIXct(paste0(input$date, " 23:59:59"), tz=input$tz)
-    
-    query <- paste0("select oba_available_exchanges as exchange from obanalytics.oba_available_exchanges(", 
-                    shQuote(format(tp_start, usetz=T))," , ", shQuote(format(tp_end, usetz=T)), ") order by 1" )
-    exchanges <- RPostgres::dbGetQuery(con, query)$exchange
-    exchange <- isolate(input$exchange)
-    
-    if(!exchange %in% exchanges) {
-      updateSelectInput(session, "exchange",choices=exchanges)
-    }
-    else {
-      updateSelectInput(session, "exchange",choices=exchanges, selected=exchange)
-    }
-    exchanges
+  }
+  
+  observeEvent(input$price_level_volume_dblclick, {
+    process_dblclick(input$price_level_volume_dblclick)
   })
   
-  exchange <- reactive({
-    exchanges <- exchanges()
-    exchange <- input$exchange
-    if(!exchange %in% exchanges ) {
-      req(FALSE)
-    }
-    exchange
+
+  observeEvent(input$overview_dblclick, {
+    process_dblclick(input$overview_dblclick)
   })
+  
+  
+  observeEvent(input$quote.map.dblclick, {
+    process_dblclick(input$quote.map.dblclick)
+  })
+  
+
+  observeEvent(input$cancellation.volume.map.dblclick, {
+    process_dblclick(input$cancellation.volume.map.dblclick)
+  })
+  
   
   
   pairs <- reactive({
     
-    exchange <- exchange()
-
-    tp_start <- as.POSIXct(paste0(input$date, " 00:00:00 "), tz=input$tz)
-    tp_end <- as.POSIXct(paste0(input$date, " 23:59:59"), tz=input$tz)
-    
-    query <- paste0("select oba_available_pairs as pair from obanalytics.oba_available_pairs(", 
-                    shQuote(format(tp_start, usetz=T))," , ", shQuote(format(tp_end, usetz=T)), " , ",
+    exchange <- input$exchange
+    query <- paste0("select oba_available_pairs as pair from obanalytics.oba_available_pairs(",
                     "obanalytics.oba_exchange_id(", shQuote(exchange), ")", ") order by 1" )
     
-    pairs <- RPostgres::dbGetQuery(con, query)$pair
+    pairs <- RPostgres::dbGetQuery(con(), query)$pair
     pair <- isolate(input$pair)
     
     if(!pair %in% pairs ) {
@@ -114,21 +123,64 @@ server <- function(input, output, session) {
   pair <- reactive({
     pairs <- pairs()
     pair <- input$pair
-    if(!pair %in% pairs ) {
+    tp <- timePoint()
+    
+    req(pair %in% pairs )
+    
+    query <- paste0("select s,e from obanalytics.oba_available_period(",
+                     "obanalytics.oba_exchange_id(", shQuote(isolate(input$exchange)), ") , ",
+                     "obanalytics.oba_pair_id(", shQuote(pair), ")",             
+                     ") order by 1" )
+    period <- RPostgres::dbGetQuery(con(), query)
+
+    if(tp < period[1,"s"] | tp > period[1,"e"]) {
+          
+      if (tp > period[1,"e"])
+        tp <- with_tz(period[1,"e"] - isolate(zoomWidth())/2, isolate(input$tz))
+      else
+        tp <- with_tz(period[1,"s"] + isolate(zoomWidth())/2, isolate(input$tz))
+      
+      updateDateInput(session, "date", value=date(tp), min=as_date(period[1,"s"]), max=as_date(period[1,"e"]))
+      updateSliderInput(session, "time.point.h", value=hour(tp))
+      updateSliderInput(session, "time.point.m", value=minute(tp))
+      updateSliderInput(session, "time.point.s", value=second(tp))
       req(FALSE)
     }
+    updateDateInput(session, "date", min=as_date(period[1,"s"]), max=as_date(period[1,"e"]))    
     pair  
   })
   
   
+  values <- reactiveValues()
   
-  # time reference 
-  timePoint <- reactive({
-    req(input$date, input$tz)
-    second.of.day <- (input$time.point.h*3600) + (input$time.point.m*60) +
-      input$time.point.s + input$time.point.ms/1000
-    as.POSIXlt(format(input$date), tz=input$tz) + second.of.day
+  observeEvent(input$tz, {
+    tz.before <- isolate(values$tz)
+
+    if(!is.null(tz.before)) {
+      tp <- isolate(timePoint())
+      values$tz <- input$tz
+      tp <- with_tz(tp, input$tz)
+      
+      updateDateInput(session, "date", value=date(tp))
+      updateSliderInput(session, "time.point.h", value=hour(tp))
+      updateSliderInput(session, "time.point.m", value=minute(tp))
+      updateSliderInput(session, "time.point.s", value=second(tp))
+    }
+    else {
+      values$tz <- input$tz
+    }
   })
+  
+  
+
+  # time reference 
+  timePoint <- reactive(
+    {
+      req(input$date, input$time.point.h, input$time.point.m, input$time.point.s, input$time.point.ms)
+      d <- ymd(input$date)
+      make_datetime(year(d), month(d), day(d),input$time.point.h, input$time.point.m, input$time.point.s, isolate(values$tz))
+      }
+    )  %>% debounce(2000)
   
   
 
@@ -138,38 +190,53 @@ server <- function(input, output, session) {
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
 
-    exchange <- exchange()
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
     withProgress(message="loading depth ...", {
-        obAnalyticsDb::depth(con, from.time, to.time, exchange, pair, cache=cache)  
+        obadiah::depth(con(), from.time, to.time, exchange, pair, cache=cache, tz=tz(tp))  
         }) 
+  })
+  
+  
+  
+  depth_cache <- reactive( {
+    
+    exchange <- isolate(input$exchange)
+    pair <- pair()
+    depth <- depth()
+    
+    obadiah::getCachedPeriods(cache, exchange, pair, 'depth') %>% 
+      arrange(cached.period.start,cached.period.end) %>%
+      mutate(cached.period.start=format(with_tz(cached.period.start, tz=values$tz), usetz=TRUE),
+             cached.period.end=format(with_tz(cached.period.end, tz=values$tz), usetz=TRUE)
+             )
   })
   
   spread <- reactive( {
     tp <- timePoint() 
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
-    exchange <- exchange()
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
 
     withProgress(message="loading spread...", {
-        obAnalyticsDb::spread(con, from.time, to.time, exchange, pair)  
+        obadiah::spread(con(), from.time, to.time, exchange, pair, cache=cache, tz=tz(tp))  
       }) 
   })
   
   trades <- reactive( {
-    req(input$date, input$tz)
-    
-    from.time <- paste0(input$date, " 00:00:00 ", input$tz)
-    to.time <- paste0(input$date, " 23:59:59.999 ", input$tz)
 
-    exchange <- exchange()
+    tp <- timePoint() 
+    from.time <- tp-12*60*60
+    to.time <- tp+12*60*60
+
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
     withProgress(message="loading trades ...", {
-      obAnalyticsDb::trades(con, from.time, to.time, exchange, pair)  
+      obadiah::trades(con(), from.time, to.time, exchange, pair, cache=cache, tz=tz(tp))  
     }) 
   })
   
@@ -180,11 +247,11 @@ server <- function(input, output, session) {
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
     
-    exchange <- exchange()
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
     withProgress(message="loading events ...", {
-      obAnalyticsDb::events(con, from.time, to.time, exchange, pair)  
+      obadiah::events(con(), from.time, to.time, exchange, pair, cache=cache, tz=tz(tp))  
     }) 
 
   })
@@ -192,14 +259,16 @@ server <- function(input, output, session) {
   depth.summary <- reactive( {
     
     tp <- timePoint() 
+
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
     
-    exchange <- exchange()
+
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
-    withProgress(message="loading depth summary ...", {
-      obAnalyticsDb::depth_summary(con, from.time, to.time, exchange, pair)  
+    withProgress(message="loading liquidity percentiles ...", {
+      obadiah::depth_summary(con(), from.time, to.time, exchange, pair, cache=cache, tz=tz(tp))  
     }) 
   })
 
@@ -214,7 +283,7 @@ server <- function(input, output, session) {
   })
 
   # set time point in ui
-  output$time.point.out <- renderText(as.character(timePoint()))
+  output$time.point.out <- renderText(format(timePoint(),format="%Y-%m-%d %H:%M:%OS3",usetz=TRUE))
   output$zoom.width.out <- renderText(paste(zoomWidth(), "seconds"))
 
   # get order book given time point
@@ -224,12 +293,12 @@ server <- function(input, output, session) {
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
     
-    exchange <- exchange()
+    exchange <- isolate(input$exchange)
     pair <- pair()
     
     
     order.book.data <- withProgress(message="loading order book ...", {
-      obAnalyticsDb::order_book(con, tp, exchange, pair, bps.range=100 )  
+      obadiah::order_book(con(), tp, exchange, pair, bps.range=100, tz=tz(tp) )  
     }) 
     if(!autoPvRange()) {
       bids <- order.book.data$bids 
@@ -257,13 +326,13 @@ server <- function(input, output, session) {
          price.to=as.numeric(input$price.to),
          volume.from=as.numeric(input$volume.from),
          volume.to=as.numeric(input$volume.to))
-  })
+  }) %>% debounce(4000)
 
   # reset specified price+volume range to limits
   observe({
     if(input$reset.range) {
       updateNumericInput(session, "price.from", value=0.01)
-      updateNumericInput(session, "price.to", value=1000.00)
+      updateNumericInput(session, "price.to", value=10000.00)
       updateNumericInput(session, "volume.from", value=0.00000001)
       updateNumericInput(session, "volume.to", value=100000)
     }
@@ -272,14 +341,19 @@ server <- function(input, output, session) {
   # overview timeseries plot
   output$overview.plot <- renderPlot({
     tp <- timePoint() 
+    tz <- attr(tp, "tzone")
+    
     from.time <- tp-zoomWidth()/2
     to.time <- tp+zoomWidth()/2
-    fmt <- get_time_format(from.time, to.time)  
     
-    p <- plotTrades(trades())
+    start.time <- tp - 12*60*60
+    end.time <- tp+12*60*60
+    
+    
+    p <- plotTrades(trades(), start.time = start.time, end.time = end.time )
     p <- p + ggplot2::geom_vline(xintercept=as.numeric(from.time), col="blue")
     p <- p + ggplot2::geom_vline(xintercept=as.numeric(tp), col="red")
-    p + ggplot2::geom_vline(xintercept=as.numeric(to.time), col="blue") + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+    p + ggplot2::geom_vline(xintercept=as.numeric(to.time), col="blue") + ggplot2::scale_x_datetime(date_breaks="4 hours", labels=scales::date_format(format="%H:%M:%S", tz=tz), limits=c(start.time, end.time))
   })
 
   # optional price histogram plot
@@ -299,7 +373,7 @@ server <- function(input, output, session) {
                         & events.filtered$volume >= priceVolumeRange()$volume.from
                         & events.filtered$volume <= priceVolumeRange()$volume.to, ]
     }
-    plotEventsHistogram(events.filtered, from.time, to.time, val="price", bw=0.25)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+    plotEventsHistogram(events.filtered, from.time, to.time, val="price", bw=0.25)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp)))
   })
 
   # optional histogram plot
@@ -334,6 +408,12 @@ server <- function(input, output, session) {
       plot(0)
     }
   })
+  
+  output$depth.cache <- renderTable({
+    dc <- depth_cache()
+    colnames(dc) <- c("start", "end", "# of rows")
+    dc
+  }, rownames=F, colnames=T, align=c("lll"))
 
   # order book bids
   output$ob_bids_out <- renderTable({
@@ -362,25 +442,50 @@ server <- function(input, output, session) {
     }
   }, rownames=F, colnames=T, align=paste0(rep("l", 6), collapse=""))
 
+  depthbiasvalue <- reactive( {input$depthbias.value}) %>% debounce(2000)
+  
   # liquidity/depth map plot
   output$depth.map.plot <- renderPlot({
     withProgress(message="generating Price level volume ...", {  
       width.seconds <- zoomWidth()
       tp <- timePoint()
+      tz <- attr(tp, "tzone")
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
       depth <- depth()
-      show.mp <- input$showmidprice
-      trades <- if(input$showtrades) trades() else NULL
-      spread <- if(input$showspread || show.mp) spread() else NULL
-      show.all.depth <- input$showalldepth
-      col.bias <- if(input$depthbias == 0) input$depthbias.value else 0
+      
+      trades <- trades() %>% filter(direction %in% input$showtrades)
+      if("with.ids.only" %in% input$showtrades) trades <- trades %>% filter(!is.na(exchange.trade.id))
+        
+
+      spread <- switch(input$showspread,
+                       M=spread(),
+                       B=spread(),
+                       NULL
+      )
+
+      show.mp <- if(input$showspread == 'M') TRUE else FALSE
+      
+      show.all.depth <- "ro" %in% input$showdepth
+      
+      if("lr" %in% input$showdepth) {
+        
+        first.depth.timestamp <- (depth %>% filter(timestamp >= from.time) %>% summarize(timestamp=min(timestamp)))$timestamp
+        first.spread <- (spread() %>% filter(lead(timestamp) >= first.depth.timestamp))[1, ]
+        
+        anchor.price <- log10((first.spread$best.bid.price + first.spread$best.ask.price)/2)
+        depth <- depth %>% mutate(price = log10(price)- anchor.price) 
+        spread <- spread %>% mutate(best.bid.price = log10(best.bid.price) - anchor.price, best.ask.price = log10(best.ask.price) - anchor.price)
+        trades <- trades %>% mutate(price = log10(price) - anchor.price)
+      } 
+
+      col.bias <- if(input$depthbias == 0) depthbiasvalue() else 0
       
       fmt <- get_time_format(from.time, to.time)  
       
       p <- if(!autoPvRange())
         plotPriceLevels(depth, spread, trades,
-                        show.mp=input$showmidprice,
+                        show.mp=show.mp,
                         show.all.depth=show.all.depth,
                         col.bias=col.bias,
                         start.time=from.time,
@@ -389,15 +494,15 @@ server <- function(input, output, session) {
                         price.to=priceVolumeRange()$price.to,
                         volume.from=priceVolumeRange()$volume.from,
                         volume.to=priceVolumeRange()$volume.to
-                        ) + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+                        ) + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz))
       else 
         plotPriceLevels(depth, spread, trades,
-                        show.mp=input$showmidprice,
+                        show.mp=show.mp,
                         show.all.depth=show.all.depth,
                         col.bias=col.bias,
                         start.time=from.time,
                         end.time=to.time
-                        ) + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+                        ) + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz))
         #p + ggplot2::geom_vline(xintercept=as.numeric(tp), col="red")
         p
     })
@@ -405,15 +510,14 @@ server <- function(input, output, session) {
 
   # liquidity percentile plot
   output$depth.percentile.plot <- renderPlot({
-    withProgress(message="generating depth percentiles...", {
+    withProgress(message="generating liquidity percentiles ...", {
       width.seconds <- zoomWidth()
       tp <- timePoint()
       from.time <- tp-width.seconds/2
       to.time <- tp+width.seconds/2
       fmt <- get_time_format(from.time, to.time)  
       
-      plotVolumePercentiles(depth.summary(), start.time=from.time,
-                            end.time=to.time, perc.line=F)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+      plotVolumePercentiles(depth.summary()) + ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp))) + ggplot2::coord_cartesian(xlim=c(from.time,to.time))
     })
   })
 
@@ -435,11 +539,11 @@ server <- function(input, output, session) {
                      price.from=priceVolumeRange()$price.from,
                      price.to=priceVolumeRange()$price.to,
                      volume.from=priceVolumeRange()$volume.from,
-                     volume.to=priceVolumeRange()$volume.to)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+                     volume.to=priceVolumeRange()$volume.to)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp)))
       else
         plotEventMap(events(),
                      start.time=from.time,
-                     end.time=to.time)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+                     end.time=to.time)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp)))
       p
     })  
   })
@@ -462,13 +566,13 @@ server <- function(input, output, session) {
                       price.from=priceVolumeRange()$price.from,
                       price.to=priceVolumeRange()$price.to,
                       volume.from=priceVolumeRange()$volume.from,
-                      volume.to=priceVolumeRange()$volume.to)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))            
+                      volume.to=priceVolumeRange()$volume.to)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp)))            
       else
         plotVolumeMap(events(),
                       action="deleted",
                       start.time=from.time,
                       end.time=to.time,
-                      log.scale=input$logvol)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=input$tz))
+                      log.scale=input$logvol)+ ggplot2::scale_x_datetime(labels=scales::date_format(format=fmt, tz=tz(tp)))
       p
     })
   })
@@ -482,7 +586,7 @@ server <- function(input, output, session) {
     to.time <- tp+width.seconds/2
     trades <- trades[trades$timestamp >= from.time
                    & trades$timestamp <= to.time, ]
-    trades$timestamp <- format(trades$timestamp, "%H:%M:%OS", tz=input$tz, usetz=T)
+    trades$timestamp <- format(trades$timestamp, "%H:%M:%OS", tz=tz(tp), usetz=T)
     trades$volume <- trades$volume
     trades
   }, options=list(pageLength=20, searchHighlight=T, order=list(list(0, "asc")),
@@ -500,8 +604,8 @@ server <- function(input, output, session) {
     to.time <- tp+width.seconds/2
     events <- events[events$timestamp >= from.time
                      & events$timestamp <= to.time, ]
-    events$timestamp <- format(events$timestamp, "%H:%M:%OS", tz=input$tz, usetz=T)
-    events$exchange.timestamp <- format(events$exchange.timestamp, "%H:%M:%OS", tz=input$tz, usetz=T)
+    events$timestamp <- format(events$timestamp, "%H:%M:%OS", tz=tz(tp), usetz=T)
+    events$exchange.timestamp <- format(events$exchange.timestamp, "%H:%M:%OS", tz=tz(tp), usetz=T)
     events$volume <- events$volume
     events$fill <- events$fill
     colnames(events) <- c("event.id", "id", "ts", "ex.ts", "price", "vol",
